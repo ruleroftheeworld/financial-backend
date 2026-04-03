@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: financial-backend-config
+  namespace: financial-backend
+data:
+  NODE_ENV:         "production"
+  PORT:             "3000"
+  LOG_LEVEL:        "info"
+  CORS_ORIGIN:      "https://app.example.com"
+
+  # JWT Configuration
+  JWT_ALGORITHM:    "RS256"
+  JWT_ACTIVE_KID:   "key1"
+  ACCESS_TOKEN_TTL: "15m"
+  REFRESH_TOKEN_TTL:"7d"
+
+  # Rate Limiting
+  RATE_LIMIT_WINDOW_MS: "900000"
+  RATE_LIMIT_MAX:       "100"
+
+  # Pagination Defaults
+  DEFAULT_PAGE_LIMIT: "20"
+  MAX_PAGE_LIMIT:     "100"
+
+  # Finance
+  DEFAULT_CURRENCY: "USD"
+
+  # Observability
+  METRICS_ENABLED:  "true"

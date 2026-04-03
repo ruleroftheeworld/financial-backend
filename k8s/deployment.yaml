@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: financial-backend
+  namespace: financial-backend
+  labels:
+    app:     financial-backend
+    version: v2.0.0
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: financial-backend
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge:       1
+      maxUnavailable: 0          # zero-downtime deploys
+  template:
+    metadata:
+      labels:
+        app:     financial-backend
+        version: v2.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path:   "/metrics"
+        prometheus.io/port:   "3000"
+    spec:
+      # ─────────────────────────────────────────
+      # Security Context (Pod level)
+      # ─────────────────────────────────────────
+      securityContext:
+        runAsNonRoot: true
+        runAsUser:    1001
+        runAsGroup:   1001
+        fsGroup:      1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # ─────────────────────────────────────────
+      # Init Container: run migrations before app starts
+      # ─────────────────────────────────────────
+      initContainers:
+        - name: migrate
+          image: your-registry/financial-backend:v2.0.0
+          command: ["npx", "prisma", "migrate", "deploy"]
+          envFrom:
+            - configMapRef:
+                name: financial-backend-config
+            - secretRef:
+                name: financial-backend-secrets
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { cpu: "500m", memory: "256Mi" }
+
+      containers:
+        - name: api
+          image: your-registry/financial-backend:v2.0.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+
+          # ────────────────────────────────────
+          # Environment — merge ConfigMap + Secret
+          # ────────────────────────────────────
+          envFrom:
+            - configMapRef:
+                name: financial-backend-config
+            - secretRef:
+                name: financial-backend-secrets
+
+          # ────────────────────────────────────
+          # Security Context (Container level)
+          # ────────────────────────────────────
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem:   true
+            capabilities:
+              drop: ["ALL"]
+
+          # ────────────────────────────────────
+          # Volume mounts for writable dirs
+          # ────────────────────────────────────
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: logs
+              mountPath: /app/logs
+
+          # ────────────────────────────────────
+          # Probes
+          # ────────────────────────────────────
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds:       20
+            failureThreshold:    3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds:       10
+            failureThreshold:    3
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            failureThreshold:    30
+            periodSeconds:       5
+
+          # ────────────────────────────────────
+          # Resource constraints
+          # ────────────────────────────────────
+          resources:
+            requests:
+              cpu:    "250m"
+              memory: "256Mi"
+            limits:
+              cpu:    "1000m"
+              memory: "512Mi"
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+
+      # Spread replicas across nodes
+      topologySpreadConstraints:
+        - maxSkew:           1
+          topologyKey:       kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: financial-backend
+
+      terminationGracePeriodSeconds: 30

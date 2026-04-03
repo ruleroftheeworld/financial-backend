@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: financial-backend
+  labels:
+    app.kubernetes.io/name: financial-backend
+    environment: production

@@ -1,0 +1,672 @@
+{
+  "info": {
+    "name": "Secure Financial Backend API",
+    "description": "Complete collection for the FAANG-level Financial Data Processing & Access Control Backend. \n\n**Setup:**\n1. Set `baseUrl` variable to your server (default: http://localhost:3000)\n2. Run 'Login' to auto-populate `accessToken`\n3. All finance endpoints use `accessToken` automatically",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",     "value": "http://localhost:3000", "type": "string" },
+    { "key": "accessToken", "value": "",                      "type": "string" },
+    { "key": "txId",        "value": "",                      "type": "string" },
+    { "key": "catId",       "value": "",                      "type": "string" },
+    { "key": "accId",       "value": "",                      "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "🔐 Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/register", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test User\",\n  \"email\": \"testuser@example.com\",\n  \"password\": \"TestPass1!@#\"\n}"
+            }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"code\": \"SUCCESS\",\n  \"message\": \"User registered successfully\",\n  \"data\": { \"user\": { \"id\": \"uuid\", \"name\": \"Test User\", \"email\": \"testuser@example.com\", \"role\": \"USER\" } }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Login (auto-saves token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('accessToken', json.data.accessToken);",
+                  "  console.log('✅ Token saved');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/login", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"password\": \"{{SEED_USER_PASSWORD}}\"\n}"
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"accessToken\": \"eyJ...\",\n    \"user\": { \"id\": \"uuid\", \"role\": \"USER\" }\n  }\n}"
+            },
+            {
+              "name": "401 Invalid credentials",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"success\": false,\n  \"code\": \"INVALID_CREDENTIALS\",\n  \"message\": \"Invalid email or password\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/refresh", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","refresh"] }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/auth/logout", "host": ["{{baseUrl}}"], "path": ["api","v1","auth","logout"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "💰 Transactions",
+      "item": [
+        {
+          "name": "Create Transaction (INCOME)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  const json = pm.response.json();",
+                  "  pm.collectionVariables.set('txId', json.data.transaction.id);",
+                  "  console.log('✅ txId saved:', json.data.transaction.id);",
+                  "}",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Amount is string', () => {",
+                  "  const tx = pm.response.json().data.transaction;",
+                  "  pm.expect(typeof tx.amount).to.equal('string');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"INCOME\",\n  \"amount\": \"5000.00\",\n  \"description\": \"Monthly salary\",\n  \"date\": \"{{$isoTimestamp}}\",\n  \"currency\": \"USD\"\n}"
+            }
+          },
+          "response": [
+            {
+              "name": "201 Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"message\": \"Transaction created\",\n  \"data\": {\n    \"transaction\": {\n      \"id\": \"uuid\",\n      \"type\": \"INCOME\",\n      \"amount\": \"5000.00\",\n      \"currency\": \"USD\",\n      \"description\": \"Monthly salary\",\n      \"date\": \"2026-04-02T10:00:00.000Z\",\n      \"category\": null,\n      \"account\": null\n    }\n  }\n}"
+            },
+            {
+              "name": "422 Float amount rejected",
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "body": "{\n  \"success\": false,\n  \"code\": \"VALIDATION_ERROR\",\n  \"message\": \"Validation failed\",\n  \"errors\": [{ \"field\": \"amount\", \"message\": \"amount must be a positive number with up to 2 decimal places\" }]\n}"
+            }
+          ]
+        },
+        {
+          "name": "Create Transaction (EXPENSE)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"EXPENSE\",\n  \"amount\": \"49.99\",\n  \"description\": \"Grocery shopping\",\n  \"date\": \"{{$isoTimestamp}}\",\n  \"currency\": \"USD\"\n}"
+            }
+          }
+        },
+        {
+          "name": "List Transactions (paginated)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has pagination', () => {",
+                  "  const data = pm.response.json().data;",
+                  "  pm.expect(data).to.have.property('pagination');",
+                  "  pm.expect(data.pagination).to.have.property('total');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/finance/transactions?page=1&limit=10&sortBy=date&sortOrder=desc",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","finance","transactions"],
+              "query": [
+                { "key": "page",      "value": "1" },
+                { "key": "limit",     "value": "10" },
+                { "key": "sortBy",    "value": "date" },
+                { "key": "sortOrder", "value": "desc" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List Transactions (filter by type)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/finance/transactions?type=EXPENSE&startDate=2026-01-01T00:00:00Z&endDate=2026-12-31T23:59:59Z",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","finance","transactions"],
+              "query": [
+                { "key": "type",      "value": "EXPENSE" },
+                { "key": "startDate", "value": "2026-01-01T00:00:00Z" },
+                { "key": "endDate",   "value": "2026-12-31T23:59:59Z" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Transaction by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions/{{txId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions","{{txId}}"] }
+          },
+          "response": [
+            {
+              "name": "404 Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"success\": false,\n  \"code\": \"TRANSACTION_NOT_FOUND\",\n  \"message\": \"Transaction not found\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "Update Transaction",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions/{{txId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions","{{txId}}"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"Monthly salary (updated)\",\n  \"amount\": \"5500.00\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Transaction (soft)",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions/{{txId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions","{{txId}}"] }
+          }
+        },
+        {
+          "name": "Restore Transaction (ADMIN only)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions/{{txId}}/restore", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions","{{txId}}","restore"] }
+          },
+          "response": [
+            {
+              "name": "403 Forbidden (non-admin)",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"code\": \"FORBIDDEN\",\n  \"message\": \"Access denied: insufficient role\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🗂️ Categories",
+      "item": [
+        {
+          "name": "List Categories",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/categories", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","categories"] }
+          }
+        },
+        {
+          "name": "List Categories (INCOME only)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/finance/categories?type=INCOME",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","finance","categories"],
+              "query": [{ "key": "type", "value": "INCOME" }]
+            }
+          }
+        },
+        {
+          "name": "Create Custom Category",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.collectionVariables.set('catId', pm.response.json().data.category.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/categories", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","categories"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Side Project\",\n  \"type\": \"INCOME\",\n  \"color\": \"#8BC34A\",\n  \"icon\": \"🚀\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Update Category",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/categories/{{catId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","categories","{{catId}}"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Side Project (updated)\",\n  \"color\": \"#4CAF50\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Delete Category",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/categories/{{catId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","categories","{{catId}}"] }
+          },
+          "response": [
+            {
+              "name": "409 Category in use",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"code\": \"CATEGORY_IN_USE\",\n  \"message\": \"Cannot delete category with 3 active transaction(s). Re-assign transactions first.\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🏦 Accounts",
+      "item": [
+        {
+          "name": "List Accounts",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/accounts", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","accounts"] }
+          }
+        },
+        {
+          "name": "Create Account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "  pm.collectionVariables.set('accId', pm.response.json().data.account.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/accounts", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","accounts"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Main Checking\",\n  \"type\": \"CHECKING\",\n  \"currency\": \"USD\",\n  \"isDefault\": true\n}"
+            }
+          }
+        },
+        {
+          "name": "Update Account",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/accounts/{{accId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","accounts","{{accId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Primary Checking\",\n  \"description\": \"Day-to-day expenses\"\n}" }
+          }
+        },
+        {
+          "name": "Delete Account",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/accounts/{{accId}}", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","accounts","{{accId}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📊 Dashboard",
+      "item": [
+        {
+          "name": "Summary (all time)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Has required fields', () => {",
+                  "  const d = pm.response.json().data;",
+                  "  pm.expect(d).to.have.property('totalIncome');",
+                  "  pm.expect(d).to.have.property('totalExpense');",
+                  "  pm.expect(d).to.have.property('netBalance');",
+                  "  pm.expect(d).to.have.property('transactionCounts');",
+                  "});",
+                  "pm.test('Amounts are strings (not floats)', () => {",
+                  "  const d = pm.response.json().data;",
+                  "  pm.expect(typeof d.totalIncome).to.equal('string');",
+                  "  pm.expect(typeof d.totalExpense).to.equal('string');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/dashboard/summary", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","dashboard","summary"] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"totalIncome\": \"8500.00\",\n    \"totalExpense\": \"3200.50\",\n    \"netBalance\": \"5299.50\",\n    \"transactionCounts\": { \"income\": 5, \"expense\": 12, \"total\": 17 },\n    \"period\": { \"startDate\": null, \"endDate\": null },\n    \"cached\": false\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Summary (date range)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/finance/dashboard/summary?startDate=2026-01-01T00:00:00Z&endDate=2026-03-31T23:59:59Z",
+              "host": ["{{baseUrl}}"],
+              "path": ["api","v1","finance","dashboard","summary"],
+              "query": [
+                { "key": "startDate", "value": "2026-01-01T00:00:00Z" },
+                { "key": "endDate",   "value": "2026-03-31T23:59:59Z" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Category Breakdown",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/dashboard/category-breakdown?type=EXPENSE", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","dashboard","category-breakdown"], "query": [{ "key": "type", "value": "EXPENSE" }] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"breakdown\": [\n      { \"categoryId\": \"uuid\", \"categoryName\": \"Food\", \"color\": \"#FF5722\", \"icon\": \"🍔\", \"type\": \"EXPENSE\", \"totalAmount\": \"320.50\", \"count\": 8 },\n      { \"categoryId\": \"uuid\", \"categoryName\": \"Transport\", \"color\": \"#FF9800\", \"icon\": \"🚗\", \"type\": \"EXPENSE\", \"totalAmount\": \"180.00\", \"count\": 12 }\n    ]\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Monthly Trends (12 months)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/dashboard/monthly-trends?months=12", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","dashboard","monthly-trends"], "query": [{ "key": "months", "value": "12" }] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"data\": {\n    \"trends\": [\n      { \"month\": \"2025-05\", \"income\": \"5000.00\", \"expense\": \"2100.30\", \"net\": \"2899.70\", \"incomeCount\": 2, \"expenseCount\": 9 },\n      { \"month\": \"2025-06\", \"income\": \"5500.00\", \"expense\": \"3200.80\", \"net\": \"2299.20\", \"incomeCount\": 3, \"expenseCount\": 11 }\n    ],\n    \"months\": 12\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Recent Transactions",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/dashboard/recent?limit=10", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","dashboard","recent"], "query": [{ "key": "limit", "value": "10" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "👥 Users (Admin)",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/users?page=1&limit=20", "host": ["{{baseUrl}}"], "path": ["api","v1","users"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "📈 Analytics (Admin/Analyst)",
+      "item": [
+        {
+          "name": "Platform Analytics Summary",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/analytics/summary", "host": ["{{baseUrl}}"], "path": ["api","v1","analytics","summary"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🏥 Health & Metrics",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "body": "{ \"status\": \"ok\", \"uptime\": 3600.5, \"timestamp\": \"2026-04-02T10:00:00.000Z\" }"
+            }
+          ]
+        },
+        {
+          "name": "Prometheus Metrics",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/metrics", "host": ["{{baseUrl}}"], "path": ["metrics"] }
+          }
+        },
+        {
+          "name": "Swagger UI",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/docs", "host": ["{{baseUrl}}"], "path": ["docs"] }
+          }
+        },
+        {
+          "name": "OpenAPI JSON Spec",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/docs.json", "host": ["{{baseUrl}}"], "path": ["docs.json"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "🔒 Security Tests",
+      "item": [
+        {
+          "name": "IDOR — Access other user's transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('IDOR blocked → 404 (not 200 or 403)', () => {",
+                  "  pm.expect(pm.response.code).to.equal(404);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions/00000000-0000-0000-0000-000000000000", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions","00000000-0000-0000-0000-000000000000"] }
+          }
+        },
+        {
+          "name": "Mass Assignment — userId in body ignored",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Response transaction belongs to authenticated user', () => {",
+                  "  if (pm.response.code === 201) {",
+                  "    const tx = pm.response.json().data.transaction;",
+                  "    pm.expect(tx.userId).to.not.equal('admin-uuid-here');",
+                  "  }",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"INCOME\",\n  \"amount\": \"9999.99\",\n  \"description\": \"Mass assignment test\",\n  \"date\": \"{{$isoTimestamp}}\",\n  \"userId\": \"admin-uuid-here\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Injection — Script in description",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('XSS escaped in response', () => {",
+                  "  const body = pm.response.text();",
+                  "  pm.expect(body).to.not.include('<script>');",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type",  "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/api/v1/finance/transactions", "host": ["{{baseUrl}}"], "path": ["api","v1","finance","transactions"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"EXPENSE\",\n  \"amount\": \"1.00\",\n  \"description\": \"<script>alert('xss')</script>\",\n  \"date\": \"{{$isoTimestamp}}\"\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

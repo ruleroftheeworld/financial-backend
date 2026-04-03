@@ -1,0 +1,202 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+  url           = env("DATABASE_URL")
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id       String  @id @default(uuid())
+  email    String  @unique
+  password String? // Optional for OAuth users
+  name     String
+  role     Role    @default(USER)
+
+  googleId            String?    @unique
+  provider            String?    @default("local")
+  sessions            Session[]
+  auditLogs           AuditLog[]
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  failedLoginAttempts Int        @default(0)
+  lockUntil           DateTime?
+  lastTempTokenJti    String?
+
+  tokenVersion Int     @default(0)
+  totpSecret   String?
+  totpEnabled  Boolean @default(false)
+
+  // PATCH 4: Add Timestamp Tracking
+  lastTempTokenUsedAt DateTime?
+
+  // PATCH 6: Lightweight Key Rotation Support
+  totpSecretKeyVersion Int?
+
+  // Finance relations
+  accounts         Account[]
+  categories       Category[]
+  transactions     Transaction[]
+  financeAuditLogs FinanceAuditLog[]
+
+  @@map("users")
+}
+
+
+model Session {
+  id     String @id
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  refreshTokenHash String
+
+  userAgent String?
+  ipAddress String?
+
+  expiresAt   DateTime
+  lastUsedAt  DateTime?
+  revoked     Boolean   @default(false)
+  isUsed      Boolean   @default(false)
+  mfaVerified Boolean   @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model AuditLog {
+  id String @id @default(uuid())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action String
+  status String
+
+  ip        String?
+  userAgent String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────
+// RBAC Role Enum
+// SECURITY_ANALYST replaces ANALYST.
+// Run the migration SQL to rename existing rows.
+// ─────────────────────────────────────────────
+enum Role {
+  USER
+  ADMIN
+  SECURITY_ANALYST
+}
+
+// ─────────────────────────────────────────────────────────────
+// FINANCE MODULE MODELS
+// ─────────────────────────────────────────────────────────────
+
+model Account {
+  id          String      @id @default(uuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  type        AccountType
+  /// Stored as NUMERIC(20,2) in PostgreSQL — never a float
+  balance     Decimal     @default(0) @db.Decimal(20, 2)
+  currency    String      @default("USD")
+  description String?
+  isDefault   Boolean     @default(false)
+  deletedAt   DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  transactions Transaction[]
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Category {
+  id        String          @id @default(uuid())
+  userId    String?
+  user      User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name      String
+  type      TransactionType
+  color     String?
+  icon      String?
+  isDefault Boolean         @default(false)
+  deletedAt DateTime?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  transactions Transaction[]
+
+  @@index([userId])
+  @@map("categories")
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  userId      String
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId   String?
+  account     Account?        @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  categoryId  String?
+  category    Category?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  type        TransactionType
+  /// Stored as NUMERIC(20,2) — precise monetary amounts, no float drift
+  amount      Decimal         @db.Decimal(20, 2)
+  currency    String          @default("USD")
+  description String
+  notes       String?
+  date        DateTime
+  deletedAt   DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  auditEntries FinanceAuditLog[]
+
+  @@index([userId])
+  @@index([userId, date])
+  @@index([userId, type])
+  @@index([categoryId])
+  @@index([accountId])
+  @@map("transactions")
+}
+
+model FinanceAuditLog {
+  id            String       @id @default(uuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactionId String?
+  transaction   Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  action        String
+  before        Json?
+  after         Json?
+  ip            String?
+  userAgent     String?
+  createdAt     DateTime     @default(now())
+
+  @@index([userId])
+  @@index([transactionId])
+  @@map("finance_audit_logs")
+}
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+  CREDIT
+  INVESTMENT
+  WALLET
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+

@@ -1,0 +1,165 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: auth_redis
+    restart: unless-stopped
+    # 🔒 SEC-04: No host port — Redis is only accessible within the Docker network
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: authdb
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-authdb}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # 🔒 SEC-02: No host port — PostgreSQL is only accessible within the Docker network
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-postgres}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auth_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-authdb}
+      REDIS_URL: redis://redis:6379
+      # ── JWT Multi-Key (KID rotation) ──────────
+      JWT_ACTIVE_KID: ${JWT_ACTIVE_KID:-key1}
+      JWT_KEY_KEY1_PRIVATE_FILE: /app/keys/key1/private.pem
+      JWT_KEY_KEY1_PUBLIC_FILE: /app/keys/key1/public.pem
+      JWT_KEY_KEY2_PRIVATE_FILE: /app/keys/key2/private.pem
+      JWT_KEY_KEY2_PUBLIC_FILE: /app/keys/key2/public.pem
+      # Legacy fallback (used if no KID keys configured)
+      JWT_PRIVATE_KEY_FILE: /app/keys/jwt_private.pem
+      JWT_PUBLIC_KEY_FILE: /app/keys/jwt_public.pem
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+    ports:
+      - '${PORT:-3000}:3000'
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./keys:/app/keys:ro
+    command: npm run dev
+    networks:
+      - backend
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:3000/health || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auth_worker
+    restart: unless-stopped
+    command: npm run worker
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-authdb}
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./keys:/app/keys:ro
+    networks:
+      - backend
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: auth_migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-authdb}
+    command: ['npx', 'prisma', 'migrate', 'deploy']
+    restart: 'no'
+    networks:
+      - backend
+
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    container_name: auth_seed
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-authdb}
+    command: ['node', 'prisma/seed.js']
+    restart: 'no'
+    networks:
+      - backend
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - backend
+    depends_on:
+      - backend
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3001:3000"
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+  
+
+networks:
+  backend:
