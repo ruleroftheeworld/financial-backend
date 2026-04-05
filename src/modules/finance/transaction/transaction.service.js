@@ -297,13 +297,13 @@ export const createTransaction = async (userId, data, meta = {}) => {
         tx,
         userId,
         action:        FINANCE_ACTIONS.TRANSACTION_CREATED,
-        transactionId: txn.id,
-        after:         serializeForAudit(txn),
+        transactionId: transaction.id,
+        after:         serializeForAudit(transaction),
         ip:            meta.ip,
         userAgent:     meta.userAgent,
       });
 
-      return txn;
+      return transaction;
     }); // ← END $transaction
   } catch (err) {
     // Release idempotency lock on failure so caller can retry

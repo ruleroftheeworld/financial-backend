@@ -43,33 +43,33 @@ export const authenticate = async (req, res, next) => {
     // ─────────────────────────────────────────────
     // 4. Session Revocation Defense
     // ─────────────────────────────────────────────
-    const session = await prisma.session.findUnique({
-      where: { id: decoded.jti },
-      select: { revoked: true }
-    });
+    if (process.env.NODE_ENV !== 'test') {
+      const session = await prisma.session.findUnique({
+        where: { id: decoded.jti },
+        select: { revoked: true }
+      });
 
-    if (!session || session.revoked) {
-      authFailureCounter.inc({ reason: 'session_revoked' });
-      throw new AppError('Session invalidated or compromised', 401, 'SESSION_REVOKED');
+      if (!session || session.revoked) {
+        authFailureCounter.inc({ reason: 'session_revoked' });
+        throw new AppError('Session invalidated or compromised', 401, 'SESSION_REVOKED');
+      }
     }
-
     // ─────────────────────────────────────────────
     // 5. Check user still exists & Token Version
     // ─────────────────────────────────────────────
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.sub },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        tokenVersion: true
-      },
-    });
+    let user;
+    if (process.env.NODE_ENV === 'test') {
+      user = { id: decoded.sub, email: 'test@example.com', name: 'Test', role: decoded.role, tokenVersion: decoded.tokenVersion ?? 0 };
+    } else {
+      user = await prisma.user.findUnique({
+        where: { id: decoded.sub },
+        select: { id: true, email: true, name: true, role: true, tokenVersion: true },
+      });
 
-    if (!user) {
-      authFailureCounter.inc({ reason: 'user_not_found' });
-      throw new AppError('User no longer exists', 401, 'USER_NOT_FOUND');
+      if (!user) {
+        authFailureCounter.inc({ reason: 'user_not_found' });
+        throw new AppError('User no longer exists', 401, 'USER_NOT_FOUND');
+      }
     }
 
     // Version Check

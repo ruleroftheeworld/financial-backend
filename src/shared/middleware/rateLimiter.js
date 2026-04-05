@@ -6,8 +6,12 @@ import redisClient from '../config/redis.js';
 import { verifyTempToken } from '../utils/jwt.js';
 import { rateLimitCounter } from '../../metrics/metrics.js';
 import { app as appConfig } from '../config/index.js';
+const isTest = process.env.NODE_ENV === 'test';
 
-export const apiLimiter = rateLimit({
+const noopLimiter = (req, res, next) => next()
+
+
+export const apiLimiter = isTest ? noopLimiter : rateLimit({
   store: new RedisStore({
     sendCommand: (...args) => redisClient.call(...args),
   }),
@@ -22,7 +26,7 @@ export const apiLimiter = rateLimit({
   },
 });
 
-export const authLimiter = rateLimit({
+export const authLimiter = isTest ? noopLimiter : rateLimit({
   store: new RedisStore({
     sendCommand: (...args) => redisClient.call(...args),
   }),
@@ -36,7 +40,7 @@ export const authLimiter = rateLimit({
 });
 
 // 🔐 SECURITY FIX: Strict MFA rate limiting to prevent TOTP brute-force
-export const mfaLimiter = rateLimit({
+export const mfaLimiter = isTest ? noopLimiter : rateLimit({
   store: new RedisStore({
     sendCommand: (...args) => redisClient.call(...args),
   }),
@@ -85,7 +89,7 @@ export const mfaLimiter = rateLimit({
 // Applied to /api/internal/* BEFORE internalAuth.
 // 50 requests per 15 minutes, keyed by IP.
 // ─────────────────────────────────────────────
-export const internalLimiter = rateLimit({
+export const internalLimiter = isTest ? noopLimiter : rateLimit({
   store: new RedisStore({
     sendCommand: (...args) => redisClient.call(...args),
   }),

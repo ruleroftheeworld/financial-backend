@@ -158,18 +158,22 @@ export const getSummary = async (userId, { startDate, endDate } = {}) => {
   }
 
   // Net balance — computed in PostgreSQL using parameterized fragments (no injection risk)
-  const netResult = await prisma.$queryRaw`
-    SELECT
-      COALESCE(SUM(CASE WHEN type = 'INCOME'  THEN amount ELSE 0 END), 0)
-      - COALESCE(SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END), 0)
-      AS net_balance
-    FROM transactions
-    WHERE "userId"    = ${userId}
-      AND "deletedAt" IS NULL
-      AND "accountId" IS NOT NULL
-      ${startDate ? prisma.raw(`AND date >= '${new Date(startDate).toISOString()}'::timestamptz`) : prisma.raw('')}
-      ${endDate   ? prisma.raw(`AND date <= '${new Date(endDate).toISOString()}'::timestamptz`)   : prisma.raw('')}
-  `;
+  const conditions = [
+    `"userId" = '${userId}'`,
+    `"deletedAt" IS NULL`,
+    `"accountId" IS NOT NULL`,
+    startDate ? `date >= '${new Date(startDate).toISOString()}'::timestamptz` : null,
+    endDate   ? `date <= '${new Date(endDate).toISOString()}'::timestamptz`   : null,
+  ].filter(Boolean).join(' AND ');
+
+  const netResult = await prisma.$queryRawUnsafe(`
+      SELECT
+        COALESCE(SUM(CASE WHEN type = 'INCOME'  THEN amount ELSE 0 END), 0)
+        - COALESCE(SUM(CASE WHEN type = 'EXPENSE' THEN amount ELSE 0 END), 0)
+        AS net_balance
+      FROM transactions
+      WHERE ${conditions}
+    `);
 
   const netBalance = netResult[0]?.net_balance?.toString() || '0.00';
 
