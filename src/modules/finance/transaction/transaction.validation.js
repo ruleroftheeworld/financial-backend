@@ -65,7 +65,14 @@ export const createTransactionRules = [
     .notEmpty().withMessage('date is required')
     .isISO8601({ strict: true, strictSeparator: true })
     .withMessage('date must be a strict ISO 8601 date-time (e.g. 2026-04-01T09:00:00Z)')
-    .toDate(),
+    .toDate()
+    .custom((v) => {
+      const now = new Date();
+      // Allow up to 24 h in the future to handle timezone edge cases
+      const maxAllowed = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+      if (v > maxAllowed) throw new Error('date must not be in the future');
+      return true;
+    }),
 
   body('categoryId')
     .optional({ nullable: true })
@@ -110,7 +117,12 @@ export const updateTransactionRules = [
     .optional()
     .isISO8601({ strict: true, strictSeparator: true })
     .withMessage('date must be a strict ISO 8601 date-time (e.g. 2026-04-01T09:00:00Z)')
-    .toDate(),
+    .toDate()
+    .custom((v) => {
+      const maxAllowed = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      if (v > maxAllowed) throw new Error('date must not be in the future');
+      return true;
+    }),
 
   body('categoryId')
     .optional({ nullable: true })
