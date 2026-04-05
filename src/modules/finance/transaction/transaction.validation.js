@@ -97,7 +97,7 @@ export const updateTransactionRules = [
     .custom((v) => parseFloat(v) > 0)
     .withMessage('amount must be greater than zero'),
 
-  currencyRule('currency'),
+  
 
   body('description')
     .optional()
