@@ -88,6 +88,7 @@ const router = Router();
  */
 router.post(
   '/',
+  authorizeRoles('USER', 'ADMIN'),
   idempotency,              // Step 2: HTTP-level idempotency (must run after authenticate)
   createTransactionRules,
   validate,
@@ -202,12 +203,12 @@ router.get(
  */
 router.patch(
   '/:id',
+  authorizeRoles('USER', 'ADMIN'),
   transactionIdParamRule,
   updateTransactionRules,
   validate,
   ctrl.updateTransaction
 );
-
 /**
  * @swagger
  * /finance/transactions/{id}:
@@ -232,6 +233,7 @@ router.patch(
  */
 router.delete(
   '/:id',
+  authorizeRoles('USER', 'ADMIN'),
   transactionIdParamRule,
   validate,
   ctrl.deleteTransaction
