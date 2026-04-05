@@ -17,7 +17,8 @@ import { body, query, param } from 'express-validator';
 // Reusable helpers
 // ─────────────────────────────────────────────
 
-const VALID_AMOUNT_REGEX = /^\d{1,15}(\.\d{1,2})?$/;
+const VALID_AMOUNT_REGEX = /^\d{1,9}(\.\d{1,2})?$/;
+const MAX_AMOUNT = 999999999.99;
 
 const amountRule = (field = 'amount') =>
   body(field)
@@ -25,8 +26,12 @@ const amountRule = (field = 'amount') =>
     .isString().withMessage(`${field} must be a string`)
     .matches(VALID_AMOUNT_REGEX)
     .withMessage(`${field} must be a positive number with up to 2 decimal places (e.g. "1500.00")`)
-    .custom((v) => parseFloat(v) > 0)
-    .withMessage(`${field} must be greater than zero`);
+    .custom((v) => {
+      const n = parseFloat(v);
+      if (n <= 0) throw new Error(`${field} must be greater than zero`);
+      if (n > MAX_AMOUNT) throw new Error(`${field} must not exceed ${MAX_AMOUNT}`);
+      return true;
+    });
 
 const currencyRule = (field = 'currency') =>
   body(field)
