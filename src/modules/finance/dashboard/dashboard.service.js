@@ -136,7 +136,7 @@ export const getSummary = async (userId, { startDate, endDate } = {}) => {
   // Single-pass aggregation using Prisma groupBy
   const rows = await prisma.transaction.groupBy({
     by:     ['type'],
-    where:  { userId, deletedAt: null, ...dateFilter },
+    where:  { userId, deletedAt: null, accountId: { not: null }, ...dateFilter },
     _sum:   { amount: true },
     _count: { id: true },
   });
@@ -166,8 +166,9 @@ export const getSummary = async (userId, { startDate, endDate } = {}) => {
     FROM transactions
     WHERE "userId"    = ${userId}
       AND "deletedAt" IS NULL
-      ${startDateFilter(startDate)}
-      ${endDateFilter(endDate)}
+      AND "accountId" IS NOT NULL
+      ${startDate ? prisma.raw(`AND date >= '${new Date(startDate).toISOString()}'::timestamptz`) : prisma.raw('')}
+      ${endDate   ? prisma.raw(`AND date <= '${new Date(endDate).toISOString()}'::timestamptz`)   : prisma.raw('')}
   `;
 
   const netBalance = netResult[0]?.net_balance?.toString() || '0.00';
@@ -203,6 +204,7 @@ export const getCategoryBreakdown = async (userId, { type, startDate, endDate } 
   const where = {
     userId,
     deletedAt: null,
+    accountId:  { not: null },
     ...(type && { type }),
     ...buildDateFilter(startDate, endDate),
   };
@@ -261,6 +263,7 @@ export const getMonthlyTrends = async (userId, { months = 12 } = {}) => {
     FROM transactions
     WHERE "userId"    = ${userId}
       AND "deletedAt" IS NULL
+      AND "accountId" IS NOT NULL
       AND date >= NOW() - (INTERVAL '1 month' * ${safeMonths})
     GROUP BY DATE_TRUNC('month', date), type
     ORDER BY DATE_TRUNC('month', date) ASC
@@ -309,7 +312,7 @@ export const getRecentTransactions = async (userId, { limit = 10 } = {}) => {
 
   // Step 5+6: userId + deletedAt enforced at service layer
   const transactions = await prisma.transaction.findMany({
-    where:   { userId, deletedAt: null },
+    where:   { userId, deletedAt: null, accountId: { not: null } },
     take:    safeLimit,
     orderBy: { date: 'desc' },
     include: {
