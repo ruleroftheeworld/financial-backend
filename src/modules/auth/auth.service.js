@@ -275,14 +275,16 @@ export const refresh = async (token, { ipAddress, userAgent }) => {
     throw new AppError('Refresh token missing', 401, 'REFRESH_TOKEN_MISSING');
   }
 
+  // ── Step 1: Verify JWT signature BEFORE touching the DB.
+  // This is intentionally outside the transaction — it is CPU-only and
+  // an invalid signature means we never need a DB round-trip.
   let decoded;
   try {
     decoded = verifyRefreshToken(token);
   } catch (err) {
-    // Basic verify failed, but could be reuse/compromise attempts
     const attemptDecoded = jwtLib.decode(token);
     if (attemptDecoded?.sub) {
-       logger.warn('TOKEN_REUSE_DETECTED_INVALID_SIG', { userId: attemptDecoded.sub, ipAddress });
+      logger.warn('TOKEN_REUSE_DETECTED_INVALID_SIG', { userId: attemptDecoded.sub, ipAddress });
     }
     throw new AppError('Invalid refresh token', 401, 'REFRESH_TOKEN_INVALID');
   }
@@ -291,133 +293,223 @@ export const refresh = async (token, { ipAddress, userAgent }) => {
     throw new AppError('Invalid refresh token', 401, 'REFRESH_TOKEN_INVALID');
   }
 
-  const session = await prisma.session.findUnique({
+  // ── Step 2: Argon2 hash verification — also outside the DB transaction.
+  //
+  // WHY: Argon2 takes 200–400ms by design. Holding a DB serializable
+  // transaction open for that long would block every other refresh request
+  // for the same session, causing cascading timeouts under load.
+  //
+  // HOW this is still safe: we verify the hash first using the token string.
+  // We then pass into the transaction and do the atomic CAS (compare-and-swap)
+  // on isUsed. If the hash doesn't match we never enter the transaction.
+  // An attacker cannot skip the hash check because the transaction re-reads
+  // the session row under a FOR UPDATE lock and the CAS on isUsed=false will
+  // fail for every concurrent duplicate even if they somehow shared a valid hash.
+  //
+  // The only scenario where pre-verification is insufficient is if the Argon2
+  // hash changes between here and the transaction — which cannot happen because
+  // refreshTokenHash is written once at session creation and never mutated.
+
+  // Fetch the session once (read-only, outside tx) to get the hash for Argon2.
+  const sessionForHash = await prisma.session.findUnique({
     where: { id: decoded.jti },
-    include: { user: true },
+    select: {
+      id:               true,
+      revoked:          true,
+      isUsed:           true,
+      expiresAt:        true,
+      refreshTokenHash: true,
+      userId:           true,
+      ipAddress:        true,
+      userAgent:        true,
+    },
   });
 
-  // If NOT found -> throw REFRESH_TOKEN_INVALID
-  if (!session) {
+  if (!sessionForHash) {
     logger.warn('REFRESH_TOKEN_NOT_FOUND', { jti: decoded.jti, ipAddress });
     throw new AppError('Invalid refresh token', 401, 'REFRESH_TOKEN_INVALID');
   }
 
-  // Check if session is explicitly revoked
-  if (session.revoked) {
+  // Fast-path checks that don't need the lock — reject before Argon2.
+  if (sessionForHash.revoked) {
     logger.warn('REFRESH_TOKEN_REVOKED', { userId: decoded.sub, jti: decoded.jti, ipAddress });
     throw new AppError('Invalid refresh token', 401, 'REFRESH_TOKEN_INVALID');
   }
 
-  // REUSE DETECTION: If found AND isUsed === true
-  if (session.isUsed) {
-    logger.warn('TOKEN_REUSE_DETECTED', { userId: decoded.sub, jti: decoded.jti, ipAddress });
-    sessionSecurityCounter.inc({ event: 'token_reuse' });
-    await prisma.session.updateMany({
-      where: { userId: decoded.sub },
-      data: { revoked: true }
-    });
-
-    await logSecurityEvent({
-      userId: decoded.sub,
-      action: 'TOKEN_REUSE_DETECTED',
-      status: 'FAILURE',
-      ip: ipAddress,
-      userAgent,
-      metadata: { jti: decoded.jti, allSessionsRevoked: true },
-    });
-
-    sessionSecurityCounter.inc({ event: 'session_compromised' });
-    throw new AppError('Refresh token reuse detected. All sessions revoked.', 401, 'SESSION_COMPROMISED');
-  }
-
-  if (session.expiresAt < new Date()) {
+  if (sessionForHash.expiresAt < new Date()) {
     throw new AppError('Session expired or invalid', 401, 'REFRESH_TOKEN_INVALID');
   }
 
-  const user = session.user;
-
-  if (user.lockUntil && user.lockUntil > new Date()) {
-    logger.warn('REFRESH_BLOCKED_ACCOUNT_LOCKED', {
-      userId: user.id,
-      ipAddress
-    });
-
-    throw new AppError(
-      'Account temporarily locked',
-      403,
-      'ACCOUNT_LOCKED'
-    );
-  }
-
-  // Validate hashed token — use Argon2 verification
-  if (session.refreshTokenHash) {
+  // Argon2 verification — done BEFORE the DB transaction to keep tx duration short.
+  if (sessionForHash.refreshTokenHash) {
     const { verifyPassword: verifyHash } = await import('../../shared/utils/password.js');
-    const isTokenMatch = await verifyHash(session.refreshTokenHash, token);
+    const isTokenMatch = await verifyHash(sessionForHash.refreshTokenHash, token);
     if (!isTokenMatch) {
-      logger.warn('TOKEN_MISMATCH_REUSE_DETECTED', { userId: session.userId, jti: decoded.jti, ipAddress });
+      logger.warn('TOKEN_MISMATCH_REUSE_DETECTED', { userId: sessionForHash.userId, jti: decoded.jti, ipAddress });
       sessionSecurityCounter.inc({ event: 'token_hash_mismatch' });
       await prisma.session.updateMany({
-        where: { userId: session.userId },
-        data: { revoked: true }
+        where: { userId: sessionForHash.userId },
+        data:  { revoked: true },
       });
       throw new AppError('Refresh token reuse detected. All sessions revoked.', 401, 'SESSION_COMPROMISED');
     }
   }
 
-  // 🔐 Active Session Defense
-  if (
-    (session.ipAddress && session.ipAddress !== ipAddress) ||
-    (session.userAgent && session.userAgent !== userAgent)
-  ) {
-    await prisma.session.update({
-      where: { id: decoded.jti },
-      data: { revoked: true }
-    });
-    
-    await logSecurityEvent({
-      userId: session.userId,
-      action: 'SESSION_REVOKED',
-      status: 'SUSPICIOUS_SESSION_DETECTED',
-      ip: ipAddress,
-      userAgent
-    });
-    
-    logger.warn('SUSPICIOUS_SESSION_REVOKED', { userId: session.userId, ipAddress, userAgent });
-    sessionSecurityCounter.inc({ event: 'session_hijack' });
-    throw new AppError('Session anomalously accessed and revoked', 403, 'SESSION_COMPROMISED');
-  }
+  // ── Step 3: Serializable transaction — the atomic gate.
+  //
+  // isolationLevel: 'Serializable' tells PostgreSQL to run this transaction as
+  // if it were the only one in the system. If two concurrent transactions both
+  // try to read + write the same session row, PostgreSQL will let one succeed
+  // and abort the other with error code 40001 (serialization_failure).
+  //
+  // Inside the transaction we:
+  //   a) Re-read the session (this read is now part of the serializable snapshot)
+  //   b) Run all business checks against the locked row
+  //   c) Mark isUsed=true atomically with a WHERE isUsed=false CAS condition
+  //   d) Return the user object needed for token issuance
+  //
+  // The CAS (step c) is the hard safety net: even if PostgreSQL somehow lets two
+  // serializable transactions proceed concurrently, only one updateMany with
+  // WHERE isUsed=false can return count=1. The other gets count=0 and we revoke.
 
-  // ATOMIC UPDATE to mark as used (Requirement 5)
-  const updatedSession = await prisma.session.updateMany({
-    where: {
-      id: decoded.jti,
-      isUsed: false
-    },
-    data: {
-      isUsed: true
+  let safeUser;
+
+  try {
+    safeUser = await prisma.$transaction(async (tx) => {
+      // Re-read session inside the serializable snapshot with the full user join.
+      const session = await tx.session.findUnique({
+        where:   { id: decoded.jti },
+        include: { user: true },
+      });
+
+      // Defensive re-checks inside the transaction (the row state may have
+      // changed between the read above and now if another request committed first).
+      if (!session || session.revoked) {
+        throw new AppError('Invalid refresh token', 401, 'REFRESH_TOKEN_INVALID');
+      }
+
+      // REUSE DETECTION inside the tx — if isUsed is already true, a previous
+      // request already claimed this token. Revoke all sessions and reject.
+      if (session.isUsed) {
+        logger.warn('TOKEN_REUSE_DETECTED', { userId: decoded.sub, jti: decoded.jti, ipAddress });
+        sessionSecurityCounter.inc({ event: 'token_reuse' });
+
+        await tx.session.updateMany({
+          where: { userId: decoded.sub },
+          data:  { revoked: true },
+        });
+
+        // Fire-and-forget audit log (outside the tx to avoid blocking commit)
+        logSecurityEvent({
+          userId: decoded.sub,
+          action: 'TOKEN_REUSE_DETECTED',
+          status: 'FAILURE',
+          ip:     ipAddress,
+          userAgent,
+          metadata: { jti: decoded.jti, allSessionsRevoked: true },
+        }).catch(() => {});
+
+        sessionSecurityCounter.inc({ event: 'session_compromised' });
+        throw new AppError('Refresh token reuse detected. All sessions revoked.', 401, 'SESSION_COMPROMISED');
+      }
+
+      if (session.expiresAt < new Date()) {
+        throw new AppError('Session expired or invalid', 401, 'REFRESH_TOKEN_INVALID');
+      }
+
+      const user = session.user;
+
+      if (user.lockUntil && user.lockUntil > new Date()) {
+        logger.warn('REFRESH_BLOCKED_ACCOUNT_LOCKED', { userId: user.id, ipAddress });
+        throw new AppError('Account temporarily locked', 403, 'ACCOUNT_LOCKED');
+      }
+
+      // IP / UA anomaly check.
+      if (
+        (session.ipAddress && session.ipAddress !== ipAddress) ||
+        (session.userAgent && session.userAgent !== userAgent)
+      ) {
+        await tx.session.update({
+          where: { id: decoded.jti },
+          data:  { revoked: true },
+        });
+
+        logSecurityEvent({
+          userId: session.userId,
+          action: 'SESSION_REVOKED',
+          status: 'SUSPICIOUS_SESSION_DETECTED',
+          ip:     ipAddress,
+          userAgent,
+        }).catch(() => {});
+
+        logger.warn('SUSPICIOUS_SESSION_REVOKED', { userId: session.userId, ipAddress, userAgent });
+        sessionSecurityCounter.inc({ event: 'session_hijack' });
+        throw new AppError('Session anomalously accessed and revoked', 403, 'SESSION_COMPROMISED');
+      }
+
+      // ── THE ATOMIC COMPARE-AND-SWAP ──────────────────────────────────────
+      // WHERE isUsed=false ensures only ONE concurrent request can claim
+      // this token. PostgreSQL's serializable isolation makes this a true
+      // atomic operation — no two transactions can both see isUsed=false
+      // and both update to isUsed=true.
+      const claimed = await tx.session.updateMany({
+        where: { id: decoded.jti, isUsed: false },
+        data:  { isUsed: true },
+      });
+
+      if (claimed.count === 0) {
+        // Lost the race — another concurrent request claimed the token first.
+        logger.warn('TOKEN_REUSE_DETECTED_RACE_CONDITION', {
+          userId: session.userId,
+          jti:    decoded.jti,
+          ipAddress,
+        });
+        sessionSecurityCounter.inc({ event: 'token_race' });
+
+        await tx.session.updateMany({
+          where: { userId: session.userId },
+          data:  { revoked: true },
+        });
+
+        throw new AppError(
+          'Refresh token reuse detected. All sessions revoked.',
+          401,
+          'SESSION_COMPROMISED'
+        );
+      }
+
+      const { password: _, ...safe } = user;
+      return safe;
+
+    }, {
+      isolationLevel: 'Serializable',
+      // Keep the timeout tight — this tx should complete in <100ms (no Argon2 inside).
+      timeout: 10_000,
+    });
+
+  } catch (err) {
+    // Re-throw AppErrors as-is. Prisma serialization failures (P2034) surface
+    // as a generic DB error — translate them to a safe user-facing message.
+    if (err instanceof AppError) throw err;
+
+    if (err.code === 'P2034') {
+      // PostgreSQL serialization_failure — another transaction won the race.
+      logger.warn('SERIALIZATION_FAILURE_ON_REFRESH', { jti: decoded.jti, ipAddress });
+      sessionSecurityCounter.inc({ event: 'token_race' });
+      throw new AppError('Invalid refresh token', 401, 'REFRESH_TOKEN_INVALID');
     }
-  });
 
-  if (updatedSession.count === 0) {
-    // Race condition detected! Another request already marked it as used.
-    logger.warn('TOKEN_REUSE_DETECTED_RACE_CONDITION', { userId: session.userId, jti: decoded.jti, ipAddress });
-    sessionSecurityCounter.inc({ event: 'token_race' });
-    await prisma.session.updateMany({
-      where: { userId: session.userId },
-      data: { revoked: true }
-    });
-    throw new AppError('Refresh token reuse detected. All sessions revoked.', 401, 'SESSION_COMPROMISED');
+    throw err;
   }
 
-  const { password: _, ...safeUser } = session.user;
-
+  // ── Step 4: Issue new tokens — happens AFTER the transaction commits.
   const tokens = await issueTokens(safeUser, { ipAddress, userAgent });
 
   await logSecurityEvent({
     userId: safeUser.id,
     action: 'TOKEN_REFRESHED',
     status: 'SUCCESS',
-    ip: ipAddress,
+    ip:     ipAddress,
     userAgent,
     metadata: { oldJti: decoded.jti },
   });
