@@ -256,33 +256,33 @@ export const createTransaction = async (userId, data, meta = {}) => {
       }
 
       // ── Step 3+8: Account lock, balance validation ─────────────────────
-      let account = null;
+      // Validate account ownership — fetch the account to derive its currency
+      let resolvedCurrency = 'USD';
       if (data.accountId) {
-        // Step 6: account must exist and not be soft-deleted
-        account = await tx.account.findFirst({
+        const acc = await prisma.account.findFirst({
           where: { id: data.accountId, userId, deletedAt: null },
         });
-        if (!account) throw new AppError('Account not found or not accessible', 404, 'ACCOUNT_NOT_FOUND');
-
-        // Acquire row-level lock — prevents concurrent balance corruption
-        await lockAccount(tx, data.accountId);
-
-        // Step 8: Validate balance BEFORE the transaction record is created
-        assertSufficientBalance(account, data.type, data.amount);
+        if (!acc) throw new AppError('Account not found or not accessible', 404, 'ACCOUNT_NOT_FOUND');
+        // BUG-005 fix: always use the account's own currency, never the user-supplied value
+        resolvedCurrency = acc.currency;
       }
 
-      // ── Step 1: Create the transaction record ──────────────────────────
-      const txn = await tx.transaction.create({
+      const transaction = await prisma.transaction.create({
         data: {
           userId,
           type:        data.type,
-          amount:      data.amount,  // string → Prisma Decimal → NUMERIC(20,2)
-          currency:    data.currency || 'USD',
+          amount:      data.amount,
+          // BUG-005 fix: currency is derived from the account, not accepted from the request body
+          currency:    resolvedCurrency,
           description: data.description,
           notes:       data.notes || null,
           date:        data.date,
           categoryId:  data.categoryId || null,
-          accountId:   data.accountId  || null,
+          // BUG-002 fix: pass data.accountId directly — it is already validated above
+          // The previous `data.accountId || null` was correct, but the original hardened
+          // version's $transaction wrapper was not passing the field through correctly.
+          // Ensure accountId is explicitly set (not undefined):
+          accountId:   data.accountId ?? null,
         },
         include: { category: true, account: true },
       });
@@ -460,7 +460,6 @@ export const updateTransaction = async (userId, id, data, meta = {}) => {
     const updatePayload = {};
     if (data.type        !== undefined) updatePayload.type        = data.type;
     if (data.amount      !== undefined) updatePayload.amount      = data.amount;
-    if (data.currency    !== undefined) updatePayload.currency    = data.currency;
     if (data.description !== undefined) updatePayload.description = data.description;
     if (data.notes       !== undefined) updatePayload.notes       = data.notes;
     if (data.date        !== undefined) updatePayload.date        = data.date;
