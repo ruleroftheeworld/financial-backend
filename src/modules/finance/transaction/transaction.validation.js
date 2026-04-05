@@ -63,7 +63,8 @@ export const createTransactionRules = [
 
   body('date')
     .notEmpty().withMessage('date is required')
-    .isISO8601().withMessage('date must be a valid ISO 8601 date-time')
+    .isISO8601({ strict: true, strictSeparator: true })
+    .withMessage('date must be a strict ISO 8601 date-time (e.g. 2026-04-01T09:00:00Z)')
     .toDate(),
 
   body('categoryId')
@@ -107,7 +108,8 @@ export const updateTransactionRules = [
 
   body('date')
     .optional()
-    .isISO8601().withMessage('date must be a valid ISO 8601 date-time')
+    .isISO8601({ strict: true, strictSeparator: true })
+    .withMessage('date must be a strict ISO 8601 date-time (e.g. 2026-04-01T09:00:00Z)')
     .toDate(),
 
   body('categoryId')
