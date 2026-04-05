@@ -52,14 +52,12 @@ export const createTransactionRules = [
   body('description')
     .trim()
     .notEmpty().withMessage('description is required')
-    .isLength({ min: 1, max: 255 }).withMessage('description must be 1–255 characters')
-    .escape(),
+    .isLength({ min: 1, max: 255 }).withMessage('description must be 1–255 characters'),
 
   body('notes')
     .optional({ nullable: true })
     .isLength({ max: 1000 }).withMessage('notes must be at most 1000 characters')
-    .trim()
-    .escape(),
+    .trim(),
 
   body('date')
     .notEmpty().withMessage('date is required')
@@ -104,14 +102,12 @@ export const updateTransactionRules = [
   body('description')
     .optional()
     .trim()
-    .isLength({ min: 1, max: 255 }).withMessage('description must be 1–255 characters')
-    .escape(),
+    .isLength({ min: 1, max: 255 }).withMessage('description must be 1–255 characters'),
 
   body('notes')
     .optional({ nullable: true })
     .isLength({ max: 1000 }).withMessage('notes must be at most 1000 characters')
-    .trim()
-    .escape(),
+    .trim(),
 
   body('date')
     .optional()
