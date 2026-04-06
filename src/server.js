@@ -44,7 +44,7 @@ const startServer = async () => {
     await prisma.$connect();
     logger.info('✅ Database connected');
 
-    const server = app.listen(PORT, () => {
+    const server = app.listen(PORT,"0.0.0.0", () => {
       logger.info(`🚀 Server running on port ${PORT} [${config.app.nodeEnv}]`);
       logger.info(`🔐 JWT Algorithm: ${config.jwt.algorithm}`);
       logger.info(`🔑 Password Hashing: Argon2id`);
