@@ -12,9 +12,9 @@
     "migrate:dev": "npx prisma migrate dev",
     "seed": "node prisma/seed.js",
     "db:setup": "npm run migrate && npm run seed",
-    "test": "NODE_ENV=test node --experimental-vm-modules node_modules/.bin/jest --forceExit --detectOpenHandles",
-    "test:watch": "NODE_ENV=test node --experimental-vm-modules node_modules/.bin/jest --watch",
-    "test:coverage": "NODE_ENV=test node --experimental-vm-modules node_modules/.bin/jest --coverage --forceExit",
+    "test":          "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit --detectOpenHandles",
+"test:watch":    "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
+"test:coverage": "cross-env NODE_ENV=test node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage --forceExit",
     "generate-keys": "node scripts/generate-keys.js",
     "lint": "eslint src/ --ext .js",
     "studio": "npx prisma studio"
@@ -48,37 +48,21 @@
   },
   "devDependencies": {
     "@jest/globals": "^29.7.0",
+    "cross-env": "^10.1.0",
     "jest": "^29.7.0",
     "nodemon": "^3.1.0",
     "prisma": "^5.11.0",
-    "supertest": "^7.0.0"
+    "supertest": "^7.2.2"
   },
-  "jest": {
-    "testEnvironment": "node",
-    "extensionsToTreatAsEsm": [
-      ".js"
-    ],
-    "transform": {},
-    "testMatch": [
-      "**/tests/**/*.test.js"
-    ],
-    "setupFilesAfterEach": [
-      "./tests/setup.js"
-    ],
-    "collectCoverageFrom": [
-      "src/**/*.js",
-      "!src/metrics/**",
-      "!src/shared/config/swagger.js"
-    ],
-    "coverageThresholds": {
-      "global": {
-        "branches": 60,
-        "functions": 70,
-        "lines": 70,
-        "statements": 70
-      }
-    }
-  },
+"jest": {
+  "testEnvironment": "node",
+  "transform": {},
+  "testMatch": ["**/tests/**/*.test.js"],
+  "collectCoverageFrom": ["src/**/*.js", "!src/metrics/**", "!src/shared/config/swagger.js"],
+  "coverageThreshold": {
+    "global": { "branches": 60, "functions": 70, "lines": 70, "statements": 70 }
+  } 
+},
   "engines": {
     "node": ">=20.0.0"
   }
