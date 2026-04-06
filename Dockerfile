@@ -38,4 +38,4 @@ USER nodeuser
 EXPOSE 3000
 
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "src/server.js"]   
+CMD ["sh", "-c", "npx prisma db push && node src/server.js"]
