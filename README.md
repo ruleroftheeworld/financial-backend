@@ -370,3 +370,211 @@ Import `grafana/financial-backend-dashboard.json` into Grafana (Prometheus datas
 | **String amounts in API** | No float drift risk. Trade-off: clients must parse the string before display arithmetic. |
 | **Mocked tests (no testcontainers)** | Fast CI (< 5s). Trade-off: doesn't catch real DB constraint violations. Add testcontainers for true integration coverage. |
 | **Monorepo structure** | Simple deployment. Trade-off: a microservices split (auth-service / finance-service) would give independent scaling but adds network overhead. |
+
+---
+
+## 🔐 Security Testing Report
+
+> Conducted via manual Postman testing + Jest suite (48 tests).
+> All findings below are from live API testing against the local dev environment.
+> Phases 1–5 completed. Phases 6–8 (Business Logic, Soft Delete, MFA) pending.
+
+---
+
+### Testing Phases Overview
+
+| Phase | Area | Tests Run | Bugs Found | Status |
+|-------|------|-----------|------------|--------|
+| Phase 1 | Input Validation | 14 | 6 | ✅ Complete |
+| Phase 2 | RBAC Expansion | 10 | 1 | ✅ Complete |
+| Phase 3 | Race Conditions | 5 | 1 | ✅ Complete |
+| Phase 4 | Token Management | 6 | 0 | ✅ Complete |
+| Phase 5 | Rate Limiting & Brute Force | 5 | 4 | ✅ Complete |
+| Phase 6 | Business Logic / Insufficient Funds | — | — | 🔲 Pending |
+| Phase 7 | Soft Delete Edge Cases | — | — | 🔲 Pending |
+| Phase 8 | MFA / TOTP Completion | — | — | 🔲 Pending |
+
+---
+
+### Bug Registry
+
+#### 🔴 Critical
+
+---
+
+**BUG-RC-001 — Concurrent Refresh Token Reuse (TOCTOU Race Condition)**
+- **Phase:** Race Conditions
+- **Endpoint:** `POST /api/v1/auth/refresh`
+- **Description:** When the same refresh token is used in 5 simultaneous requests (0ms delay), all 5 succeed and return unique valid access tokens. Sequential reuse detection works correctly but fails under concurrency due to a Time-of-Check to Time-of-Use (TOCTOU) race.
+- **Impact:** An attacker with one stolen refresh token can spawn unlimited parallel sessions. All issued access tokens remain valid until expiry.
+- **Reproduce:** Login → send 5 concurrent POST /auth/refresh with same refresh token cookie → all return 200 OK with unique tokens.
+- **Fix:** Wrap the token check and mark-as-used in an atomic DB transaction using `SELECT FOR UPDATE` or a compare-and-swap (CAS) on the token `used` flag.
+
+---
+
+**BUG-RL-001 — Correct Password Bypasses Active Account Lockout**
+- **Phase:** Rate Limiting & Brute Force
+- **Endpoint:** `POST /api/v1/auth/login`
+- **Description:** After 5 failed login attempts the account is locked (`lockUntil` set). However, submitting the correct password during the lockout window returns `200 OK` and issues a valid access token — completely bypassing the lockout.
+- **Impact:** Brute force protection is defeated. An attacker can try 4 wrong passwords then the correct one, cycling indefinitely without ever being truly locked out.
+- **Reproduce:** Fail login 5 times → account locked → login with correct password → 200 OK.
+- **Fix:** In `auth.service.js`, check `lockUntil > now` **before** password verification, not after. Lockout must be enforced regardless of password correctness.
+
+---
+
+#### 🔴 High
+
+---
+
+**BUG-001 — `account_id` Never Validated — Transactions Always Created with `accountId: null`**
+- **Phase:** Input Validation
+- **Endpoint:** `POST /api/v1/finance/transactions`
+- **Description:** The `account_id` field sent in the request body is silently ignored. Every transaction is created with `accountId: null` regardless of what value is supplied. The field is not listed as required in validation errors.
+- **Impact:** Transactions are never linked to accounts. Balance tracking is broken. Orphaned records accumulate in the DB. Also masks race condition testing on balance deductions.
+- **Reproduce:** POST /transactions with any valid `account_id` → response always shows `accountId: null`.
+- **Fix:** Add `account_id` as a required, validated UUID field in the transaction validator. Verify account ownership before insert. Use `accountId` (camelCase) consistently — Jest tests use `accountId` which may work differently from the `account_id` (snake_case) the API reads.
+
+---
+
+**BUG-005 — Mass Assignment: `currency` Field Overridable by User**
+- **Phase:** Input Validation
+- **Endpoint:** `POST /api/v1/finance/transactions`
+- **Description:** Sending `currency` in the request body overrides the transaction currency. The field is not stripped before DB insertion.
+- **Impact:** Users can assign arbitrary currencies (GBP, BTC, XYZ) to transactions on USD accounts, breaking all balance calculations and multi-currency reporting.
+- **Reproduce:** POST /transactions with extra field `"currency": "GBP"` → response shows `currency: "GBP"` stored.
+- **Fix:** Strip `currency` from the request body entirely. Derive it from the linked account at the service layer.
+
+---
+
+**BUG-RBAC-001 — Analyst Role Can Create Transactions (No Role Restriction on POST /transactions)**
+- **Phase:** RBAC Expansion
+- **Endpoint:** `POST /api/v1/finance/transactions`
+- **Description:** The `SECURITY_ANALYST` role has no restriction on calling `POST /transactions`. The transaction was created successfully (201) with the Analyst's token. The Analyst role should be read-only for finance endpoints.
+- **Impact:** Any authenticated user regardless of role can create financial transactions. Combined with BUG-001 (accountId null), fixing accountId could expose a full account hijack vector.
+- **Reproduce:** Login as analyst → POST /transactions with valid body → 201 Created.
+- **Fix:** Add `authorizeRoles('USER', 'ADMIN')` middleware to `POST /finance/transactions`. Analyst should only have GET access to finance endpoints.
+
+---
+
+#### 🟡 Medium
+
+---
+
+**BUG-002 — Non-ISO 8601 Date Silently Coerced Instead of Rejected**
+- **Phase:** Input Validation
+- **Endpoint:** `POST /api/v1/finance/transactions`
+- **Description:** When sending `date` as `"04-04-2026"` (DD-MM-YYYY format), the API accepts and silently converts it to a valid ISO timestamp instead of rejecting it.
+- **Impact:** Ambiguous date formats (DD-MM vs MM-DD) could result in transactions stored with wrong dates. Locale-sensitive bugs in reporting.
+- **Fix:** Tighten the date validator to reject anything that isn't strictly ISO 8601 (`YYYY-MM-DDTHH:mm:ss.sssZ`). Do not rely on JS `Date` parsing which is too lenient.
+
+---
+
+**BUG-003 — Future Dates Accepted Without Restriction**
+- **Phase:** Input Validation
+- **Endpoint:** `POST /api/v1/finance/transactions`
+- **Description:** Transactions dated as far as year 2099 are accepted with no validation or warning.
+- **Impact:** Future-dated transactions affect current balance reporting, appear in dashboards, and mislead users or auditors.
+- **Fix:** Add a validator rule: `date` must not be greater than `now + N days` (e.g. 7 days for scheduled transactions, or strictly `<= now` if scheduling is not a feature).
+
+---
+
+**BUG-004 — No Maximum Amount Validation**
+- **Phase:** Input Validation
+- **Endpoint:** `POST /api/v1/finance/transactions`
+- **Description:** The API accepted a transaction amount of `"999999999999999.99"` without any upper bound check. The DB column is `NUMERIC(20,2)` which can technically hold it, but no business-level cap exists.
+- **Impact:** No upper bound means potential precision edge cases and no protection against obviously erroneous entries.
+- **Fix:** Add a max value validator — e.g. `amount must be <= "9999999999.99"` (10 billion) as a reasonable financial cap.
+
+---
+
+**BUG-006 — HTML Encoding Applied to REST API Text Fields**
+- **Phase:** Input Validation
+- **Endpoint:** `POST /api/v1/finance/transactions`
+- **Description:** Description field content is HTML-encoded before storage (apostrophe stored as `&#x27;`, `<script>` stored as `&lt;script&gt;`). This is incorrect behavior for a JSON REST API — HTML escaping belongs in the frontend, not the backend.
+- **Impact:** Data in DB is polluted with HTML entities. API consumers (mobile apps, reports) must decode HTML to display raw text correctly. Double-encoding risk if the frontend also escapes.
+- **Fix:** Remove HTML encoding (`express-validator`'s `.escape()`) from transaction/description validators. Store raw strings. Let the frontend handle display escaping.
+
+---
+
+**BUG-RL-002 — Wrong HTTP Status Code for Account Lockout (403 instead of 423)**
+- **Phase:** Rate Limiting
+- **Endpoint:** `POST /api/v1/auth/login`
+- **Description:** Account lockout returns `403 Forbidden` instead of the semantically correct `423 Locked`.
+- **Fix:** Return `res.status(423)` for `ACCOUNT_LOCKED` errors in the login controller.
+
+---
+
+**BUG-RL-003 — Sensitive Internal Fields Leaked in Login Response**
+- **Phase:** Rate Limiting
+- **Endpoint:** `POST /api/v1/auth/login`
+- **Description:** The login success response includes internal user fields: `failedLoginAttempts`, `lockUntil`, `tokenVersion`, `lastTempTokenJti`, `totpSecretKeyVersion`, `lastTempTokenUsedAt`.
+- **Impact:** Exposes internal security state to clients. `failedLoginAttempts` tells an attacker exactly how many attempts remain before lockout.
+- **Fix:** Whitelist the user fields returned in the login response. Only expose: `id`, `email`, `name`, `role`, `provider`, `totpEnabled`, `createdAt`.
+
+---
+
+#### ⚪ Low / Info
+
+---
+
+**BUG-RL-004 — No `retryAfter` Field in Lockout Response**
+- **Phase:** Rate Limiting
+- **Description:** When an account is locked, the error response does not include when the user can retry (`retryAfter` seconds or `lockUntil` timestamp).
+- **Fix:** Include `"retryAfter": <seconds>` or `"lockUntil": "<ISO timestamp>"` in the `details` field of the `ACCOUNT_LOCKED` error response.
+
+---
+
+### What Passed ✅
+
+| Area | Controls Verified |
+|------|------------------|
+| JWT Security | RS256 signing, `alg:none` blocked, signature validation, expiry enforcement |
+| Session Management | Server-side revocation on logout, HTTP-only refresh cookie cleared |
+| Token Tampering | Payload modification detected via signature mismatch |
+| Malformed Tokens | Graceful rejection, no 500 crashes |
+| IDOR | User A cannot read/delete User B's transactions or accounts (404) |
+| Admin Routes | 403/404 for non-admin roles on `/api/v1/admin/*` and `/api/v1/users` |
+| Idempotency | Concurrent requests with same Idempotency-Key return same TX ID |
+| Concurrent Logins | 10 simultaneous logins produce unique tokens, no session collisions |
+| Concurrent Account Creation | Clean unique records, no crashes or corruption |
+| Input Validation | Negative/zero amounts, invalid types, 3+ decimals, garbage dates, oversized descriptions all correctly rejected |
+| SQL Injection | ORM (Prisma) prevents SQL injection in all tested fields |
+| Account Lockout (trigger) | Locks after exactly 5 failed attempts |
+
+---
+
+### Remediation Priority
+
+```
+IMMEDIATE (before any production deployment)
+├── BUG-RL-001  Lockout bypass with correct password
+├── BUG-RC-001  TOCTOU refresh token race condition
+└── BUG-001     account_id never linked (breaks all balance logic)
+
+HIGH (before beta/staging release)
+├── BUG-005     currency mass assignment
+├── BUG-RBAC-001 Analyst can create transactions
+└── Re-run RC-001 balance race test after BUG-001 is fixed
+
+MEDIUM (next sprint)
+├── BUG-002     Non-ISO date coercion
+├── BUG-003     Future date accepted
+├── BUG-004     No max amount cap
+├── BUG-006     HTML encoding in REST API
+└── BUG-RL-003  Sensitive fields in login response
+
+LOW (polish)
+├── BUG-RL-002  403 → 423 for lockout
+└── BUG-RL-004  Add retryAfter to lockout response
+```
+
+---
+
+### Pending Test Areas
+
+- **Phase 6 — Business Logic:** Insufficient funds (EXPENSE > balance), account type rules
+- **Phase 7 — Soft Delete Edge Cases:** Transactions on deleted accounts, restore flows
+- **Phase 8 — MFA Completion:** TOTP verify (blocked by clock sync issue — needs resolution)
+- **Regression Testing:** Re-run all failed tests after fixes applied
+- **Load Testing:** Artillery/k6 for true concurrency stress test beyond Postman Runner
+
